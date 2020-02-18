@@ -40,10 +40,6 @@ async function getFiles (media) {
     url = media.media_url
   }
 
-  if (lastFiles.has(filename)) {
-    return null
-  }
-
   return {
     profile,
     filename,
@@ -138,8 +134,10 @@ async function main () {
 
   const medias = data.filter((_) => (_).extended_entities).map((_) => (_).extended_entities.media).flatMap((_) => _)
 
-  const files = (await Promise.all(medias.map(getFiles))).filter((_) => _)
-  const entries = (await Promise.allSettled(files.map((file) => saveFile(file, DROPBOX_RETRY))))
+  const files = (await Promise.all(medias.map(getFiles)))
+  const newFiles = files.filter((file) => !lastFiles.has(file.filename))
+
+  const entries = (await Promise.allSettled(newFiles.map((file) => saveFile(file, DROPBOX_RETRY))))
     .filter((entry) => entry.status === 'fulfilled')
     .flatMap((_) => _.value)
   const result = await got.post(
@@ -153,9 +151,11 @@ async function main () {
   )
   console.log(result.body)
 
-  const succeeded = entries.map(entry => path.basename(entry.commit.path))
-  lastFiles = new Set(succeeded)
-  await fs.promises.writeFile(lastFilesPath, JSON.stringify(Array.from(lastFiles)))
+  const succeeded = new Set(entries.map((entry) => path.basename(entry.commit.path)))
+  const failed = newFiles.map((file) => file.filename)
+    .filter((filename) => !succeeded.has(filename))
+  lastFiles = files.map((file) => file.filename).filter((filename) => !failed.includes(filename))
+  await fs.promises.writeFile(lastFilesPath, JSON.stringify(lastFiles))
 }
 
 (async () => {
