@@ -1,13 +1,26 @@
 {
   "name": "twitter-archive",
-  "version": "1.0.0",
+  "version": "0.0.1",
+  "description": "twitter-archive",
   "main": "index.js",
-  "license": "MIT",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zfanta/twitter-archive.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/zfanta/twitter-archive/issues"
+  },
+  "homepage": "https://github.com/zfanta/twitter-archive#readme",
   "dependencies": {
+    "dotenv": "^8.2.0",
     "dropbox": "^4.0.30",
     "got": "^9.6.0",
     "isomorphic-fetch": "^2.2.1",
-    "make-dir": "^3.0.0",
     "twit": "^2.2.11"
   }
 }

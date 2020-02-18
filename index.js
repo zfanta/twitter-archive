@@ -1,19 +1,22 @@
+require('dotenv').config()
+
 const fs = require('fs')
 const path = require('path')
 const Twit = require('twit')
 const got = require('got')
-const makeDir = require('make-dir')
 
-const DROPBOX_TOKEN = ''
-const SAVE_PATH = ''
-const DROPBOX_ROOT = ''
+const DROPBOX_TOKEN = process.env.DROPBOX_TOKEN
+const SAVE_PATH = process.env.SAVE_PATH
+const DROPBOX_ROOT = process.env.DROPBOX_ROOT
 
 const TWITTER_OPTION = {
-  consumer_key: '',
-  consumer_secret: '',
-  access_token: '',
-  access_token_secret: '',
+  consumer_key: process.env.CONSUMER_KEY,
+  consumer_secret: process.env.CONSUMER_SECRET,
+  access_token: process.env.ACCESS_TOKEN,
+  access_token_secret: process.env.ACCESS_TOKEN_SECRET,
 }
+
+let lastFiles = null
 
 async function getFiles (media) {
   const profile = media.expanded_url.match(
@@ -36,21 +39,18 @@ async function getFiles (media) {
     url = media.media_url
   }
 
-  await makeDir(path.resolve(SAVE_PATH, profile))
-  const filePath = path.resolve(SAVE_PATH, profile, filename)
-  try {
-    await fs.promises.access(filePath, fs.constants.F_OK)
-  } catch (e) {
-    return {
-      profile,
-      filename,
-      url,
-    }
+  if (lastFiles.has(filename)) {
+    return null
   }
-  return null
+
+  return {
+    profile,
+    filename,
+    url,
+  }
 }
 
-function saveFile (file) {
+async function saveFile (file, retry) {
   const dropboxOption = {
     headers: {
       'Authorization': `Bearer ${DROPBOX_TOKEN}`,
@@ -59,18 +59,12 @@ function saveFile (file) {
     },
     retry: 20,
   }
-  const filePath = path.resolve(SAVE_PATH, file.profile, file.filename)
-  const filePath2 = path.resolve(SAVE_PATH, file.filename)
   const stream = got.stream(file.url)
 
   const endpoint = 'https://content.dropboxapi.com/2/files/upload_session/start'
-  const fStream = fs.createWriteStream(filePath)
-  const fStream2 = fs.createWriteStream(filePath2)
   const dStream = got.stream.post(endpoint, dropboxOption)
   const dStream2 = got.stream.post(endpoint, dropboxOption)
 
-  stream.pipe(fStream)
-  stream.pipe(fStream2)
   stream.pipe(dStream)
   stream.pipe(dStream2)
 
@@ -87,9 +81,6 @@ function saveFile (file) {
     })
     return function (resolve, reject) {
       stream.on('error', (err) => {
-        console.error(`${file.profile}/${file.filename}`)
-        fs.unlink(filePath, () => {})
-        fs.unlink(filePath2, () => {})
         reject(err)
       })
       stream.on('end', () => {
@@ -100,9 +91,7 @@ function saveFile (file) {
             offset,
           },
           commit: {
-            path: `${DROPBOX_ROOT}/${profile
-              ? file.profile + '/'
-              : ''}${file.filename}`,
+            path: `${DROPBOX_ROOT}/${profile ? file.profile + '/' : ''}${file.filename}`,
             mode: 'add',
             autorename: true,
             mute: true,
@@ -116,10 +105,28 @@ function saveFile (file) {
   const a = new Promise(callback(dStream, false))
   const b = new Promise(callback(dStream2, true))
 
-  return Promise.all([a, b])
+  try {
+    return await Promise.all([a, b])
+  } catch (e) {
+    if (e.statusCode === 500 && 0 < retry) {
+      return saveFile(file, retry - 1)
+    }
+    console.error(`${file.profile}/${file.filename}`)
+    console.error(e)
+    console.error()
+    return Promise.reject(e);
+  }
 }
 
 async function main () {
+  const lastFilesPath = `${SAVE_PATH}/lastFiles.json`
+  try {
+    const content = await fs.promises.readFile(lastFilesPath)
+    lastFiles = new Set(JSON.parse(content.toString()))
+  } catch (e) {
+    lastFiles = new Set()
+  }
+
   const twit = new Twit(TWITTER_OPTION)
 
   const twits = await twit.get('statuses/home_timeline', {
@@ -128,18 +135,12 @@ async function main () {
   })
   const data = twits.data
 
-  const medias = data.
-    filter((_) => (_).extended_entities).
-    map((_) => (_).extended_entities.media).
-    flatMap((_) => _)
+  const medias = data.filter((_) => (_).extended_entities).map((_) => (_).extended_entities.media).flatMap((_) => _)
 
   const files = (await Promise.all(medias.map(getFiles))).filter((_) => _)
-  // const files = require('./files')
-  const entries = (await Promise.allSettled(files.map(saveFile))).
-    flatMap((_) => _).
-    filter((entry) => entry.status === 'fulfilled').
-    map((entry) => entry.value).
-    flatMap((_) => _)
+  const entries = (await Promise.allSettled(files.map(saveFile, 10)))
+    .filter((entry) => entry.status === 'fulfilled')
+    .flatMap((_) => _.value)
   const result = await got.post(
     'https://api.dropboxapi.com/2/files/upload_session/finish_batch', {
       headers: {
@@ -147,8 +148,13 @@ async function main () {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ entries }),
-    })
+    }
+  )
   console.log(result.body)
+
+  const succeeded = entries.map(entry => path.basename(entry.commit.path))
+  lastFiles = new Set(succeeded)
+  await fs.promises.writeFile(lastFilesPath, JSON.stringify(Array.from(lastFiles)))
 }
 
 (async () => {
