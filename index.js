@@ -8,6 +8,7 @@ const got = require('got')
 const DROPBOX_TOKEN = process.env.DROPBOX_TOKEN
 const SAVE_PATH = process.env.SAVE_PATH
 const DROPBOX_ROOT = process.env.DROPBOX_ROOT
+const DROPBOX_RETRY = Number(process.env.DROPBOX_RETRY)
 
 const TWITTER_OPTION = {
   consumer_key: process.env.CONSUMER_KEY,
@@ -56,8 +57,7 @@ async function saveFile (file, retry) {
       'Authorization': `Bearer ${DROPBOX_TOKEN}`,
       'Dropbox-API-Arg': JSON.stringify({ close: true }),
       'Content-Type': 'application/octet-stream',
-    },
-    retry: 20,
+    }
   }
   const stream = got.stream(file.url)
 
@@ -109,12 +109,13 @@ async function saveFile (file, retry) {
     return await Promise.all([a, b])
   } catch (e) {
     if (e.statusCode === 500 && 0 < retry) {
+      console.error(`Retrying saveFile ${DROPBOX_RETRY - (retry - 1)}`)
       return saveFile(file, retry - 1)
     }
     console.error(`${file.profile}/${file.filename}`)
     console.error(e)
     console.error()
-    return Promise.reject(e);
+    return Promise.reject(e)
   }
 }
 
@@ -138,7 +139,7 @@ async function main () {
   const medias = data.filter((_) => (_).extended_entities).map((_) => (_).extended_entities.media).flatMap((_) => _)
 
   const files = (await Promise.all(medias.map(getFiles))).filter((_) => _)
-  const entries = (await Promise.allSettled(files.map(saveFile, 10)))
+  const entries = (await Promise.allSettled(files.map((file) => saveFile(file, DROPBOX_RETRY))))
     .filter((entry) => entry.status === 'fulfilled')
     .flatMap((_) => _.value)
   const result = await got.post(
